@@ -17,7 +17,6 @@ import (
 
 var channel chan []byte
 
-// newUUID generates a random UUID according to RFC 4122
 func newUUID() string {
 	uuid := make([]byte, 16)
 	n, err := io.ReadFull(rand.Reader, uuid)
@@ -37,7 +36,7 @@ func putObject(s3Service *s3.S3, bucketName *string, buffer *bytes.Buffer) {
 		key := fmt.Sprintf("/%04d/%02d/%02d/%04d%02d%02dT%02d%02d%02d.%06dZ-%s-%s.log",
 			now.Year(),now.Month(), now.Day(), now.Year(),now.Month(), now.Day(),
 			now.Hour(), now.Minute(), now.Second(), now.Nanosecond(), hostName, uuid)
-		fmt.Printf("writing buffer of %d lines\n", buffer.Len())
+		fmt.Printf("writing buffer of %d bytes to %s\n", buffer.Len(), key)
 		request := s3.PutObjectInput{
 			Bucket:          bucketName,
 			Body:			 bytes.NewReader(buffer.Bytes()),
