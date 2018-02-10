@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/kong-galileo-kinesis.iml" filepath="$PROJECT_DIR$/.idea/kong-galileo-kinesis.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/kong-s3-log-forwarder.iml" filepath="$PROJECT_DIR$/.idea/kong-s3-log-forwarder.iml" />
     </modules>
   </component>
 </project>

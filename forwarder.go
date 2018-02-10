@@ -13,73 +13,83 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"io"
 	"os"
+	"flag"
+	"strings"
 )
 
-var channel chan []byte
-
-func newUUID() string {
-	uuid := make([]byte, 16)
-	n, err := io.ReadFull(rand.Reader, uuid)
-	if n != len(uuid) || err != nil {
-		log.Fatalf("failed to read random generator: ", err)
-	}
-	uuid[8] = uuid[8]&^0xc0 | 0x80
-	uuid[6] = uuid[6]&^0xf0 | 0x40
-	return fmt.Sprintf("%x-%x-%x-%x-%x", uuid[0:4], uuid[4:6], uuid[6:8], uuid[8:10], uuid[10:])
+func main() {
+	logForwarder := NewS3LogForwarder()
+	logForwarder.serve()
 }
 
-func putObject(s3Service *s3.S3, bucketName *string, buffer *bytes.Buffer) {
-	if buffer.Len() > 0 {
-		now := time.Now()
-		uuid := newUUID()
-		hostName, _ := os.Hostname()
-		key := fmt.Sprintf("/%04d/%02d/%02d/%04d%02d%02dT%02d%02d%02d.%06dZ-%s-%s.log",
-			now.Year(),now.Month(), now.Day(), now.Year(),now.Month(), now.Day(),
-			now.Hour(), now.Minute(), now.Second(), now.Nanosecond(), hostName, uuid)
-		fmt.Printf("writing buffer of %d bytes to %s\n", buffer.Len(), key)
-		request := s3.PutObjectInput{
-			Bucket:          bucketName,
-			Body:			 bytes.NewReader(buffer.Bytes()),
-			Key:             aws.String(key),
-			ContentEncoding: aws.String("utf-8"),
-			ContentType:     aws.String("plain/text")}
+func NewS3LogForwarder() *S3LogForwarder {
+	result := new(S3LogForwarder)
+	result.channel = make(chan []byte, 2048)
 
-		_, err := s3Service.PutObject(&request)
-		if err != nil {
-			log.Fatalf("failed to put object to bucket: ", err)
-		}
-		buffer.Reset()
+	flag.BoolVar(&result.verbose, "verbose", false, "log level")
+
+	flag.BoolVar(&result.https, "https", false, "listen using")
+	flag.BoolVar(&result.https, "server-certificate", false, "listen using")
+	flag.IntVar(&result.listenPort, "listen-port", 4443, "of the log forwarder")
+	flag.StringVar(&result.listenAddress, "listen-address", "0.0.0.0", "of the log forwarder")
+
+	flag.StringVar(&result.bucketName, "bucket-name", "", "to write to")
+	flag.StringVar(&result.bucketRegion, "region", os.Getenv("AWS_REGION"), "of the s3 bucket")
+	flag.StringVar(&result.keyPrefix, "key-prefix", "", "for the s3 bucket key")
+
+	flag.DurationVar(&result.flushPeriod, "period", time.Duration(time.Second*30), "between flushesto s3")
+	flag.IntVar(&result.cacheSize, "cache-size", 4096, "")
+
+	flag.Parse()
+	if result.bucketName == "" {
+		log.Fatal("no bucket name specified.")
+	}
+	if result.bucketRegion == "" {
+		log.Fatal("no bucket region specified.")
+	}
+
+	if result.cacheSize <= 0 {
+		log.Fatal("cache size cannot be less than 0")
+	}
+
+	if result.flushPeriod <= time.Duration(time.Second*0) {
+		log.Fatal("flush period cannot be less than 0")
+	}
+
+	result.keyPrefix = strings.TrimRight(result.keyPrefix, "/")
+
+	sess, err := session.NewSession()
+	if err != nil {
+		log.Fatal("sessionNewSession", err)
+	}
+	result.s3 = s3.New(sess, &aws.Config{Region: aws.String(result.bucketRegion)})
+
+	return result
+}
+
+func (f *S3LogForwarder) serve() {
+	go f.bufferedPut()
+
+	if f.verbose {
+		log.Printf("forwarding to s3 bucket %s in %s\n", f.bucketName, f.bucketRegion)
+		log.Printf("flush period: %s, cache size %d\n", f.flushPeriod.String(), f.cacheSize)
+	}
+
+	http.HandleFunc("/", f.KongLogForwarder)
+	err := http.ListenAndServeTLS(fmt.Sprintf("%s:%d", f.listenAddress, f.listenPort), "server.crt", "server.key", nil)
+
+	close(f.channel)
+
+	if err != nil {
+		log.Fatal("ListenAndServe", err)
 	}
 }
 
-func bufferedPut(s3Service *s3.S3, bucketName *string) {
-	var buffer bytes.Buffer
-	timer := time.NewTimer(time.Second * 30)
-	for {
-		select {
-		case body, more := <-channel:
-			buffer.Write(body)
-			if body[len(body)-1] != 10 {
-				buffer.Write([]byte("\n"))
-			}
-			if !more || buffer.Len() > 4096 {
-				putObject(s3Service, bucketName, &buffer)
-			}
-			if !more {
-				return
-			}
-		case <-timer.C:
-			putObject(s3Service, bucketName, &buffer)
-			timer.Reset(time.Second * 30)
-		}
-	}
-}
-
-func HelloServer(w http.ResponseWriter, req *http.Request) {
+func (f *S3LogForwarder) KongLogForwarder(w http.ResponseWriter, req *http.Request) {
 	if req.Method == "POST" {
 		body, err := ioutil.ReadAll(req.Body)
 		if err == nil {
-			channel <- body
+			f.channel <- body
 			w.Header().Set("Content-Type", "text/plain")
 			fmt.Fprintf(w, "%d bytes\n", len(body))
 		} else {
@@ -90,25 +100,79 @@ func HelloServer(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-func setupS3Session(region *string) *s3.S3 {
-	sess, err := session.NewSession()
-	if err != nil {
-		log.Fatal("sessionNewSession: ", err)
+func (f *S3LogForwarder) bufferedPut() {
+	var buffer bytes.Buffer
+	timer := time.NewTimer(f.flushPeriod)
+	for {
+		select {
+		case body, more := <-f.channel:
+			buffer.Write(body)
+			if body[len(body)-1] != 10 {
+				buffer.Write([]byte("\n"))
+			}
+			if !more || buffer.Len() >= f.cacheSize {
+				f.putObject(&buffer)
+			}
+			if !more {
+				return
+			}
+		case <-timer.C:
+			f.putObject(&buffer)
+			timer.Reset(f.flushPeriod)
+		}
 	}
-	svc := s3.New(sess, &aws.Config{Region: aws.String(*region)})
-	return svc
 }
 
-func main() {
-	region := "eu-central-1"
-	bucketName := "kong-api-gateway-logs"
-	channel = make(chan []byte, 2048)
-	go bufferedPut(setupS3Session(&region), &bucketName)
-	http.HandleFunc("/", HelloServer)
-	err := http.ListenAndServeTLS(":4443", "server.crt", "server.key", nil)
-	close(channel)
+func (f *S3LogForwarder) putObject(buffer *bytes.Buffer) {
+	if buffer.Len() > 0 {
+		now := time.Now()
+		uuid := newUUID()
+		hostName, _ := os.Hostname()
+		key := fmt.Sprintf("%s/%04d/%02d/%02d/%04d%02d%02dT%02d%02d%02d.%06dZ-%s-%x.log",
+			f.keyPrefix, now.Year(), now.Month(), now.Day(), now.Year(), now.Month(), now.Day(),
+			now.Hour(), now.Minute(), now.Second(), now.Nanosecond(), hostName, uuid)
+		if f.verbose {
+			fmt.Printf("writing buffer of %d bytes to %s\n", buffer.Len(), key)
+		}
+		request := s3.PutObjectInput{
+			Bucket:          &f.bucketName,
+			Body:            bytes.NewReader(buffer.Bytes()),
+			Key:             aws.String(key),
+			ContentEncoding: aws.String("utf-8"),
+			ContentType:     aws.String("plain/text")}
 
-	if err != nil {
-		log.Fatal("ListenAndServe: ", err)
+		_, err := f.s3.PutObject(&request)
+		if err != nil {
+			log.Fatal("failed to put object to bucket", err)
+		}
+		buffer.Reset()
 	}
+}
+
+func newUUID() []byte {
+	uuid := make([]byte, 16)
+	n, err := io.ReadFull(rand.Reader, uuid)
+	if n != len(uuid) || err != nil {
+		log.Fatal("failed to read random generator.", err)
+	}
+	return uuid
+}
+
+type S3LogForwarder struct {
+	channel chan []byte
+
+	verbose       bool
+
+	https         bool
+	listenPort    int
+	listenAddress string
+
+	keyPrefix    string
+	bucketRegion string
+	bucketName   string
+
+	flushPeriod time.Duration
+	cacheSize   int
+
+	s3 *s3.S3
 }
