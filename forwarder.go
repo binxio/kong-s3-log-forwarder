@@ -34,7 +34,7 @@ func NewS3LogForwarder() *S3LogForwarder {
 	flag.StringVar(&result.listenAddress, "listen-address", "0.0.0.0", "of the log forwarder")
 
 	flag.StringVar(&result.bucketName, "bucket-name", "", "to write to")
-	flag.StringVar(&result.bucketRegion, "region", os.Getenv("AWS_REGION"), "of the s3 bucket")
+	flag.StringVar(&result.bucketRegion, "region", "", "of the s3 bucket")
 	flag.StringVar(&result.keyPrefix, "key-prefix", "KongLogs", "for the s3 bucket key")
 
 	flag.DurationVar(&result.flushPeriod, "period", time.Duration(time.Second*30), "minimum size between flushes to s3")
@@ -43,9 +43,6 @@ func NewS3LogForwarder() *S3LogForwarder {
 	flag.Parse()
 	if result.bucketName == "" {
 		log.Fatal("no bucket name specified.")
-	}
-	if result.bucketRegion == "" {
-		log.Fatal("no bucket region specified.")
 	}
 
 	if result.cacheSize <= 0 {
@@ -58,11 +55,19 @@ func NewS3LogForwarder() *S3LogForwarder {
 
 	result.keyPrefix = strings.TrimRight(result.keyPrefix, "/")
 
-	sess, err := session.NewSession()
+	session, err := session.NewSession()
+	if result.bucketRegion == "" {
+		fmt.Print(*session.Config.Region)
+		result.bucketRegion = *session.Config.Region;
+		if result.bucketRegion == "" {
+			log.Fatal("no bucket region specified.")
+		}
+	}
+
 	if err != nil {
 		log.Fatal("sessionNewSession", err)
 	}
-	result.s3 = s3.New(sess, &aws.Config{Region: aws.String(result.bucketRegion)})
+	result.s3 = s3.New(session, &aws.Config{Region: aws.String(result.bucketRegion)})
 
 	return result
 }
