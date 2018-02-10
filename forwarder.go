@@ -35,7 +35,7 @@ func NewS3LogForwarder() *S3LogForwarder {
 
 	flag.StringVar(&result.bucketName, "bucket-name", "", "to write to")
 	flag.StringVar(&result.bucketRegion, "region", os.Getenv("AWS_REGION"), "of the s3 bucket")
-	flag.StringVar(&result.keyPrefix, "key-prefix", "", "for the s3 bucket key")
+	flag.StringVar(&result.keyPrefix, "key-prefix", "KongLogs", "for the s3 bucket key")
 
 	flag.DurationVar(&result.flushPeriod, "period", time.Duration(time.Second*30), "between flushesto s3")
 	flag.IntVar(&result.cacheSize, "cache-size", 4096, "")
