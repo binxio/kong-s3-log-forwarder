@@ -1,4 +1,6 @@
-Kong API gateway log forwarder to s3
-=======
-Experimental kong-log forwarder, forwarding kong log information to s3.
+S3 http log forwarder
+=====================
+Experimental HTTP log forwarder, sending logs to S3.
+
+Initial use case is for the Kong API gateway http-log and galileo plugins.
 
