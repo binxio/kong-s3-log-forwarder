@@ -137,9 +137,9 @@ func (f *S3LogForwarder) KongLogForwarder(w http.ResponseWriter, req *http.Reque
 
 func (f *S3LogForwarder) bufferedPut() {
 	var buffer bytes.Buffer
-	timer := time.NewTimer(f.flushPeriod)
+	ticker := time.NewTicker(f.flushPeriod)
 
-	defer timer.Stop()
+	defer ticker.Stop()
 	for {
 		select {
 		case body, more := <-f.channel:
@@ -153,10 +153,9 @@ func (f *S3LogForwarder) bufferedPut() {
 			if !more {
 				return
 			}
-		case <-timer.C:
+		case <-ticker.C:
 			if buffer.Len() > 0 {
 				f.putObject(&buffer)
-				timer.Reset(f.flushPeriod)
 			}
 		}
 	}
