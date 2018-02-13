@@ -108,7 +108,7 @@ func (f *S3LogForwarder) serve() {
 	}
 
 	http.HandleFunc("/", f.KongLogForwarder)
-	http.HandleFunc("/health", f.HealthEndpoint)
+	http.HandleFunc("/kong-s3-log-forwarder/health", f.HealthEndpoint)
 	if f.protocol == "https" {
 		err = http.ListenAndServeTLS(f.listenAddr, f.certFile, f.keyFile, nil)
 	} else {
