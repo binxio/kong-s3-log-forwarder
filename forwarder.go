@@ -3,18 +3,18 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
-	"net/http"
-	"log"
+	"flag"
 	"fmt"
-	"io/ioutil"
-	"time"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"io"
+	"io/ioutil"
+	"log"
+	"net/http"
 	"os"
-	"flag"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -54,7 +54,7 @@ func NewS3LogForwarder() *S3LogForwarder {
 	}
 
 	if result.bucketRegion == "" {
-		result.bucketRegion = *session.Config.Region;
+		result.bucketRegion = *session.Config.Region
 		if result.bucketRegion == "" {
 			log.Fatal("no bucket region specified.")
 		}
@@ -108,6 +108,7 @@ func (f *S3LogForwarder) serve() {
 	}
 
 	http.HandleFunc("/", f.KongLogForwarder)
+	http.HandleFunc("/kong-s3-log-forwarder/health", f.HealthEndpoint)
 	if f.protocol == "https" {
 		err = http.ListenAndServeTLS(f.listenAddr, f.certFile, f.keyFile, nil)
 	} else {
@@ -118,6 +119,11 @@ func (f *S3LogForwarder) serve() {
 	if err != nil {
 		log.Fatal("ListenAndServe", err)
 	}
+}
+
+func (f *S3LogForwarder) HealthEndpoint(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	fmt.Fprintf(w, "OK\n")
 }
 
 func (f *S3LogForwarder) KongLogForwarder(w http.ResponseWriter, req *http.Request) {
